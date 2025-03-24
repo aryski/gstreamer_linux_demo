@@ -1,3 +1,4 @@
+#include "camera_view.h"
 #include <gst/gst.h>
 #include <gst/video/videooverlay.h>
 #include <gst/video/videoframe.h>
@@ -77,13 +78,52 @@ static void method_call_cb(FlMethodChannel* channel, FlMethodCall* method_call, 
   if (strcmp(method, "initialize") == 0) {
     // Create a new texture
     self->texture_id = flutter_view_create_texture(self->flutter_view);
-    response = FL_METHOD_RESPONSE(fl_method_success_response_new(NULL));
+    
+    // Create GStreamer pipeline
+    self->pipeline = gst_pipeline_new("camera-pipeline");
+    GstElement *v4l2src = gst_element_factory_make("v4l2src", "camera-source");
+    self->capsfilter = gst_element_factory_make("capsfilter", "caps-filter");
+    self->videoconvert = gst_element_factory_make("videoconvert", "video-convert");
+    self->appsink = gst_element_factory_make("appsink", "app-sink");
+    
+    // Set camera resolution and framerate
+    GstCaps *caps = gst_caps_new_simple("video/x-raw",
+        "width", G_TYPE_INT, 640,
+        "height", G_TYPE_INT, 480,
+        "framerate", GST_TYPE_FRACTION, 30, 1,
+        NULL);
+    g_object_set(G_OBJECT(self->capsfilter), "caps", caps, NULL);
+    gst_caps_unref(caps);
+    
+    // Configure appsink
+    g_object_set(G_OBJECT(self->appsink), "emit-signals", TRUE, NULL);
+    g_signal_connect(self->appsink, "new-sample", G_CALLBACK(new_sample_callback), self);
+    
+    // Add elements to pipeline
+    gst_bin_add_many(GST_BIN(self->pipeline),
+        v4l2src, self->capsfilter, self->videoconvert, self->appsink, NULL);
+    
+    // Link elements
+    gst_element_link_many(v4l2src, self->capsfilter, self->videoconvert, self->appsink, NULL);
+    
+    // Start pipeline
+    gst_element_set_state(self->pipeline, GST_STATE_PLAYING);
+    
+    response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_int(self->texture_id)));
   } else if (strcmp(method, "dispose") == 0) {
     // Clean up texture
     if (self->texture_id != -1) {
       flutter_view_destroy_texture(self->flutter_view, self->texture_id);
       self->texture_id = -1;
     }
+    
+    // Stop and clean up pipeline
+    if (self->pipeline) {
+      gst_element_set_state(self->pipeline, GST_STATE_NULL);
+      gst_object_unref(self->pipeline);
+      self->pipeline = NULL;
+    }
+    
     response = FL_METHOD_RESPONSE(fl_method_success_response_new(NULL));
   } else {
     response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
@@ -94,35 +134,9 @@ static void method_call_cb(FlMethodChannel* channel, FlMethodCall* method_call, 
 }
 
 static void camera_view_init(CameraView *self) {
-  // Initialize GStreamer pipeline
-  self->pipeline = gst_pipeline_new("camera-pipeline");
-  GstElement *v4l2src = gst_element_factory_make("v4l2src", "camera-source");
-  self->capsfilter = gst_element_factory_make("capsfilter", "caps-filter");
-  self->videoconvert = gst_element_factory_make("videoconvert", "video-convert");
-  self->appsink = gst_element_factory_make("appsink", "app-sink");
-  
-  // Set camera resolution and framerate
-  GstCaps *caps = gst_caps_new_simple("video/x-raw",
-      "width", G_TYPE_INT, 640,
-      "height", G_TYPE_INT, 480,
-      "framerate", GST_TYPE_FRACTION, 30, 1,
-      NULL);
-  g_object_set(G_OBJECT(self->capsfilter), "caps", caps, NULL);
-  gst_caps_unref(caps);
-  
-  // Configure appsink
-  g_object_set(G_OBJECT(self->appsink), "emit-signals", TRUE, NULL);
-  g_signal_connect(self->appsink, "new-sample", G_CALLBACK(new_sample_callback), self);
-  
-  // Add elements to pipeline
-  gst_bin_add_many(GST_BIN(self->pipeline),
-      v4l2src, self->capsfilter, self->videoconvert, self->appsink, NULL);
-  
-  // Link elements
-  gst_element_link_many(v4l2src, self->capsfilter, self->videoconvert, self->appsink, NULL);
-  
-  // Start pipeline
-  gst_element_set_state(self->pipeline, GST_STATE_PLAYING);
+  self->texture_id = -1;
+  self->pipeline = NULL;
+  self->channel = NULL;
 }
 
 void camera_view_register_with_registrar(FlPluginRegistrar* registrar) {
