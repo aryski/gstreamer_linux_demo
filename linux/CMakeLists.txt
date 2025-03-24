@@ -74,8 +74,6 @@ add_definitions(-DAPPLICATION_ID="${APPLICATION_ID}")
 add_executable(${BINARY_NAME}
   "main.cc"
   "my_application.cc"
-  "camera_view.cc"
-  "camera_view.h"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.h"
 )
