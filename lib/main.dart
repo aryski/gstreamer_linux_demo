@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 
 void main() {
   runApp(const MyApp());
@@ -65,12 +66,75 @@ class CameraViewPage extends StatelessWidget {
   }
 }
 
-class CameraView extends StatelessWidget {
+class CameraView extends StatefulWidget {
   const CameraView({super.key});
 
   @override
+  State<CameraView> createState() => _CameraViewState();
+}
+
+class _CameraViewState extends State<CameraView> {
+  static const platform = MethodChannel('camera_view');
+  int _textureId = -1;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeCamera();
+  }
+
+  Future<void> _initializeCamera() async {
+    try {
+      final int textureId = await platform.invokeMethod('initialize');
+      setState(() {
+        _textureId = textureId;
+      });
+    } on PlatformException catch (e) {
+      debugPrint('Failed to initialize camera: ${e.message}');
+    }
+  }
+
+  @override
+  void dispose() {
+    _disposeCamera();
+    super.dispose();
+  }
+
+  Future<void> _disposeCamera() async {
+    try {
+      await platform.invokeMethod('dispose');
+    } on PlatformException catch (e) {
+      debugPrint('Failed to dispose camera: ${e.message}');
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    // This is a placeholder widget that will be replaced by our native implementation
-    return const SizedBox();
+    if (defaultTargetPlatform == TargetPlatform.linux) {
+      if (_textureId == -1) {
+        return Container(
+          color: Colors.black,
+          child: const Center(
+            child: CircularProgressIndicator(),
+          ),
+        );
+      }
+      return SizedBox(
+        width: 640,
+        height: 480,
+        child: Texture(
+          textureId: _textureId,
+        ),
+      );
+    }
+    return Container(
+      color: Colors.black,
+      child: const Center(
+        child: Text(
+          'Camera view is only supported on Linux',
+          style: TextStyle(color: Colors.white),
+        ),
+      ),
+    );
   }
 }

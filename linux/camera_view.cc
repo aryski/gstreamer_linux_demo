@@ -1,5 +1,6 @@
 #include <gst/gst.h>
 #include <gst/video/videooverlay.h>
+#include <gst/video/videoframe.h>
 #include <gtk/gtk.h>
 #include <flutter_linux/flutter_linux.h>
 
@@ -7,7 +8,11 @@ struct _CameraView {
   GtkWidget parent_instance;
   GstElement *pipeline;
   GstElement *videosink;
-  GtkWidget *container;
+  GstElement *appsink;
+  GstElement *videoconvert;
+  GstElement *capsfilter;
+  int64_t texture_id;
+  FlutterView *flutter_view;
 };
 
 G_DEFINE_TYPE(CameraView, camera_view, GTK_TYPE_WIDGET)
@@ -28,16 +33,44 @@ static void camera_view_class_init(CameraViewClass *klass) {
   object_class->dispose = camera_view_dispose;
 }
 
-static void camera_view_init(CameraView *self) {
-  self->container = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-  gtk_widget_set_parent(self->container, GTK_WIDGET(self));
+static GstFlowReturn new_sample_callback(GstElement *sink, gpointer data) {
+  CameraView *self = CAMERA_VIEW(data);
+  GstSample *sample = gst_app_sink_pull_sample(GST_APP_SINK(sink));
   
-  // Create GStreamer pipeline
+  if (sample) {
+    GstBuffer *buffer = gst_sample_get_buffer(sample);
+    GstMapInfo map;
+    
+    if (gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+      // Create a texture frame
+      FlutterTextureFrame *frame = flutter_texture_frame_new(
+        self->texture_id,
+        map.data,
+        map.size,
+        gst_buffer_get_width(buffer),
+        gst_buffer_get_height(buffer)
+      );
+      
+      // Update the texture
+      flutter_view_update_texture(self->flutter_view, frame);
+      
+      gst_buffer_unmap(buffer, &map);
+      flutter_texture_frame_free(frame);
+    }
+    
+    gst_sample_unref(sample);
+  }
+  
+  return GST_FLOW_OK;
+}
+
+static void camera_view_init(CameraView *self) {
+  // Initialize GStreamer pipeline
   self->pipeline = gst_pipeline_new("camera-pipeline");
   GstElement *v4l2src = gst_element_factory_make("v4l2src", "camera-source");
-  GstElement *capsfilter = gst_element_factory_make("capsfilter", "caps-filter");
-  GstElement *videoconvert = gst_element_factory_make("videoconvert", "video-convert");
-  self->videosink = gst_element_factory_make("gtk4paintablesink", "video-sink");
+  self->capsfilter = gst_element_factory_make("capsfilter", "caps-filter");
+  self->videoconvert = gst_element_factory_make("videoconvert", "video-convert");
+  self->appsink = gst_element_factory_make("appsink", "app-sink");
   
   // Set camera resolution and framerate
   GstCaps *caps = gst_caps_new_simple("video/x-raw",
@@ -45,21 +78,45 @@ static void camera_view_init(CameraView *self) {
       "height", G_TYPE_INT, 480,
       "framerate", GST_TYPE_FRACTION, 30, 1,
       NULL);
-  g_object_set(G_OBJECT(capsfilter), "caps", caps, NULL);
+  g_object_set(G_OBJECT(self->capsfilter), "caps", caps, NULL);
   gst_caps_unref(caps);
+  
+  // Configure appsink
+  g_object_set(G_OBJECT(self->appsink), "emit-signals", TRUE, NULL);
+  g_signal_connect(self->appsink, "new-sample", G_CALLBACK(new_sample_callback), self);
   
   // Add elements to pipeline
   gst_bin_add_many(GST_BIN(self->pipeline),
-      v4l2src, capsfilter, videoconvert, self->videosink, NULL);
+      v4l2src, self->capsfilter, self->videoconvert, self->appsink, NULL);
   
   // Link elements
-  gst_element_link_many(v4l2src, capsfilter, videoconvert, self->videosink, NULL);
-  
-  // Set video sink widget
-  g_object_set(G_OBJECT(self->videosink), "widget", self->container, NULL);
+  gst_element_link_many(v4l2src, self->capsfilter, self->videoconvert, self->appsink, NULL);
   
   // Start pipeline
   gst_element_set_state(self->pipeline, GST_STATE_PLAYING);
+}
+
+static void camera_view_handle_method_call(CameraView *self, FlMethodCall *method_call) {
+  const gchar *method = fl_method_call_get_name(method_call);
+  FlMethodResponse *response = NULL;
+  
+  if (strcmp(method, "initialize") == 0) {
+    // Create a new texture
+    self->texture_id = flutter_view_create_texture(self->flutter_view);
+    response = FL_METHOD_RESPONSE(fl_method_success_response_new(NULL));
+  } else if (strcmp(method, "dispose") == 0) {
+    // Clean up texture
+    if (self->texture_id != -1) {
+      flutter_view_destroy_texture(self->flutter_view, self->texture_id);
+      self->texture_id = -1;
+    }
+    response = FL_METHOD_RESPONSE(fl_method_success_response_new(NULL));
+  } else {
+    response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
+  }
+  
+  fl_method_call_respond(method_call, response, NULL);
+  g_object_unref(response);
 }
 
 GtkWidget *camera_view_new() {
