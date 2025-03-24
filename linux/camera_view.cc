@@ -13,6 +13,7 @@ struct _CameraView {
   GstElement *capsfilter;
   int64_t texture_id;
   FlutterView *flutter_view;
+  FlMethodChannel *channel;
 };
 
 G_DEFINE_TYPE(CameraView, camera_view, GTK_TYPE_WIDGET)
@@ -23,6 +24,10 @@ static void camera_view_dispose(GObject *object) {
   if (self->pipeline) {
     gst_element_set_state(self->pipeline, GST_STATE_NULL);
     gst_object_unref(self->pipeline);
+  }
+  
+  if (self->channel) {
+    g_object_unref(self->channel);
   }
   
   G_OBJECT_CLASS(camera_view_parent_class)->dispose(object);
@@ -64,6 +69,30 @@ static GstFlowReturn new_sample_callback(GstElement *sink, gpointer data) {
   return GST_FLOW_OK;
 }
 
+static void method_call_cb(FlMethodChannel* channel, FlMethodCall* method_call, gpointer user_data) {
+  CameraView *self = CAMERA_VIEW(user_data);
+  const gchar *method = fl_method_call_get_name(method_call);
+  FlMethodResponse *response = NULL;
+  
+  if (strcmp(method, "initialize") == 0) {
+    // Create a new texture
+    self->texture_id = flutter_view_create_texture(self->flutter_view);
+    response = FL_METHOD_RESPONSE(fl_method_success_response_new(NULL));
+  } else if (strcmp(method, "dispose") == 0) {
+    // Clean up texture
+    if (self->texture_id != -1) {
+      flutter_view_destroy_texture(self->flutter_view, self->texture_id);
+      self->texture_id = -1;
+    }
+    response = FL_METHOD_RESPONSE(fl_method_success_response_new(NULL));
+  } else {
+    response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
+  }
+  
+  fl_method_call_respond(method_call, response, NULL);
+  g_object_unref(response);
+}
+
 static void camera_view_init(CameraView *self) {
   // Initialize GStreamer pipeline
   self->pipeline = gst_pipeline_new("camera-pipeline");
@@ -96,27 +125,17 @@ static void camera_view_init(CameraView *self) {
   gst_element_set_state(self->pipeline, GST_STATE_PLAYING);
 }
 
-static void camera_view_handle_method_call(CameraView *self, FlMethodCall *method_call) {
-  const gchar *method = fl_method_call_get_name(method_call);
-  FlMethodResponse *response = NULL;
+void camera_view_register_with_registrar(FlPluginRegistrar* registrar) {
+  CameraView* view = camera_view_new();
+  g_autoptr(FlStandardMessageCodec) codec = fl_standard_message_codec_new();
+  g_autoptr(FlMethodChannel) channel = fl_method_channel_new(
+      fl_plugin_registrar_get_messenger(registrar),
+      "camera_view",
+      FL_MESSAGE_CODEC(codec));
   
-  if (strcmp(method, "initialize") == 0) {
-    // Create a new texture
-    self->texture_id = flutter_view_create_texture(self->flutter_view);
-    response = FL_METHOD_RESPONSE(fl_method_success_response_new(NULL));
-  } else if (strcmp(method, "dispose") == 0) {
-    // Clean up texture
-    if (self->texture_id != -1) {
-      flutter_view_destroy_texture(self->flutter_view, self->texture_id);
-      self->texture_id = -1;
-    }
-    response = FL_METHOD_RESPONSE(fl_method_success_response_new(NULL));
-  } else {
-    response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
-  }
+  fl_method_channel_set_method_call_handler(channel, method_call_cb, g_object_ref(view), g_object_unref);
   
-  fl_method_call_respond(method_call, response, NULL);
-  g_object_unref(response);
+  fl_plugin_registrar_register_view_factory(registrar, "CameraView", FL_VIEW_FACTORY(view));
 }
 
 GtkWidget *camera_view_new() {

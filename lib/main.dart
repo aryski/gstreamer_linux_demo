@@ -86,9 +86,11 @@ class _CameraViewState extends State<CameraView> {
   Future<void> _initializeCamera() async {
     try {
       final int textureId = await platform.invokeMethod('initialize');
-      setState(() {
-        _textureId = textureId;
-      });
+      if (mounted) {
+        setState(() {
+          _textureId = textureId;
+        });
+      }
     } on PlatformException catch (e) {
       debugPrint('Failed to initialize camera: ${e.message}');
     }
