@@ -80,6 +80,14 @@ add_executable(${BINARY_NAME}
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.h"
 )
 
+# Add the camera view plugin files
+target_sources(${BINARY_NAME} PRIVATE
+  "camera_view.cc"
+  "camera_view.h"
+  "camera_view_plugin.cc"
+  "camera_view_plugin.h"
+)
+
 # Apply the standard set of build settings. This can be removed for applications
 # that need different build settings.
 apply_standard_settings(${BINARY_NAME})

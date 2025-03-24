@@ -2,7 +2,7 @@
 #include <flutter_linux/flutter_linux.h>
 #include <flutter_registrar.h>
 #include <url_launcher_linux/url_launcher_plugin.h>
-#include "camera_view.h"
+#include <camera_view/camera_view_plugin.h>
 
 void fl_register_plugins(FlPluginRegistry* registry) {
   g_autoptr(FlPluginRegistrar) url_launcher_linux_registrar =
